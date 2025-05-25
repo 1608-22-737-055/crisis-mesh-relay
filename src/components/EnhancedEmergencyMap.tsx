@@ -174,7 +174,7 @@ const EnhancedEmergencyMap: React.FC<EnhancedEmergencyMapProps> = ({
           <div>
             <strong>🌐 Mesh Network Coverage</strong><br>
             Connected devices: ${connectedPeers.length}<br>
-            Coverage area: ${Math.round(L.GeometryUtil.geodesicArea(connectedDeviceCoords) / 1000000)} km²
+            Coverage area: Active mesh network
           </div>
         `);
         
