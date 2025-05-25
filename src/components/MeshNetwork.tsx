@@ -10,7 +10,7 @@ interface EmergencyMessage {
   timestamp: Date;
   location?: { lat: number; lng: number };
   senderId: string;
-  route?: string[]; // Track message routing path
+  route?: string[];
 }
 
 interface NetworkTopology {
@@ -45,13 +45,21 @@ const MeshNetwork = forwardRef<MeshNetworkRef, MeshNetworkProps>(({
   const connectionsRef = useRef<Map<string, any>>(new Map());
   const [messageHistory, setMessageHistory] = useState<Set<string>>(new Set());
   const reconnectTimeoutRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
+  const [connectionState, setConnectionState] = useState<'initializing' | 'ready' | 'connecting' | 'connected' | 'error'>('initializing');
+  const initializationAttemptsRef = useRef(0);
+  const maxInitializationAttempts = 3;
 
   useImperativeHandle(ref, () => ({
     connectToPeer: (peerId: string) => {
-      if (peerRef.current && peerId !== peerRef.current.id) {
+      if (peerRef.current && peerId !== peerRef.current.id && connectionState === 'ready') {
         console.log('Attempting to connect to peer:', peerId);
-        const conn = peerRef.current.connect(peerId);
-        setupConnection(conn);
+        try {
+          const conn = peerRef.current.connect(peerId, { reliable: true });
+          setupConnection(conn);
+        } catch (error) {
+          console.error('Error connecting to peer:', error);
+          toast.error('Failed to connect to peer');
+        }
       }
     },
     broadcastMessage: (message: EmergencyMessage) => {
@@ -61,11 +69,20 @@ const MeshNetwork = forwardRef<MeshNetworkRef, MeshNetworkProps>(({
       };
       
       const connections = Array.from(connectionsRef.current.values());
+      let sentCount = 0;
+      
       connections.forEach(conn => {
         if (conn.open) {
-          conn.send(messageWithRoute);
+          try {
+            conn.send(messageWithRoute);
+            sentCount++;
+          } catch (error) {
+            console.error('Error sending message to peer:', error);
+          }
         }
       });
+      
+      console.log(`Message broadcasted to ${sentCount} peers`);
     },
     getPeerId: () => peerRef.current?.id || '',
     getConnectedPeers: () => Array.from(connectionsRef.current.keys()),
@@ -81,7 +98,7 @@ const MeshNetwork = forwardRef<MeshNetworkRef, MeshNetworkProps>(({
         edges: connectedPeers.map(peerId => ({
           from: myId,
           to: peerId,
-          quality: 1 // TODO: Implement actual quality measurement
+          quality: 1
         }))
       };
     }
@@ -93,6 +110,7 @@ const MeshNetwork = forwardRef<MeshNetworkRef, MeshNetworkProps>(({
       connectionsRef.current.set(conn.peer, conn);
       updatePeersList();
       updateTopology();
+      setConnectionState('connected');
       toast.success(`Connected to peer: ${conn.peer.substring(0, 8)}...`);
       
       // Clear any pending reconnection attempts
@@ -127,7 +145,11 @@ const MeshNetwork = forwardRef<MeshNetworkRef, MeshNetworkProps>(({
             // Forward to other connected peers (except sender)
             connectionsRef.current.forEach((connection, peerId) => {
               if (connection.open && peerId !== conn.peer) {
-                connection.send(updatedMessage);
+                try {
+                  connection.send(updatedMessage);
+                } catch (error) {
+                  console.error('Error forwarding message:', error);
+                }
               }
             });
           }
@@ -150,23 +172,28 @@ const MeshNetwork = forwardRef<MeshNetworkRef, MeshNetworkProps>(({
 
     conn.on('error', (err: any) => {
       console.error('Connection error with', conn.peer, ':', err);
-      toast.error('Connection error occurred');
+      connectionsRef.current.delete(conn.peer);
+      updatePeersList();
       scheduleReconnection(conn.peer);
     });
   };
 
   const scheduleReconnection = (peerId: string) => {
-    // Don't schedule if already scheduled
-    if (reconnectTimeoutRef.current.has(peerId)) return;
+    // Don't schedule if already scheduled or if peer initialization failed
+    if (reconnectTimeoutRef.current.has(peerId) || connectionState === 'error') return;
     
     const timeout = setTimeout(() => {
       console.log('Attempting to reconnect to:', peerId);
-      if (peerRef.current && peerId !== peerRef.current.id) {
-        const conn = peerRef.current.connect(peerId);
-        setupConnection(conn);
+      if (peerRef.current && peerId !== peerRef.current.id && connectionState === 'ready') {
+        try {
+          const conn = peerRef.current.connect(peerId, { reliable: true });
+          setupConnection(conn);
+        } catch (error) {
+          console.error('Reconnection failed:', error);
+        }
       }
       reconnectTimeoutRef.current.delete(peerId);
-    }, 5000); // Reconnect after 5 seconds
+    }, 5000);
     
     reconnectTimeoutRef.current.set(peerId, timeout);
   };
@@ -175,6 +202,12 @@ const MeshNetwork = forwardRef<MeshNetworkRef, MeshNetworkProps>(({
     const peers = Array.from(connectionsRef.current.keys());
     onPeersChange(peers);
     onConnectionChange(peers.length > 0);
+    
+    if (peers.length > 0 && connectionState !== 'connected') {
+      setConnectionState('connected');
+    } else if (peers.length === 0 && connectionState === 'connected') {
+      setConnectionState('ready');
+    }
   };
 
   const updateTopology = () => {
@@ -196,27 +229,44 @@ const MeshNetwork = forwardRef<MeshNetworkRef, MeshNetworkProps>(({
     }
   };
 
-  useEffect(() => {
+  const initializePeer = () => {
     console.log('Initializing PeerJS...');
+    setConnectionState('initializing');
     
+    // Enhanced STUN/TURN server configuration
+    const config = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:global.stun.twilio.com:3478' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun.relay.metered.ca:80' },
+        // Add TURN servers for better connectivity
+        {
+          urls: 'turn:openrelay.metered.ca:80',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        }
+      ],
+      iceCandidatePoolSize: 10
+    };
+
     const peer = new Peer({
-      config: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:global.stun.twilio.com:3478' },
-          { urls: 'stun:stun1.l.google.com:19302' }
-        ]
-      },
-      debug: 2
+      config,
+      debug: 1, // Reduced debug level
+      port: 443,
+      secure: true
     });
 
     peerRef.current = peer;
 
     peer.on('open', (id) => {
       console.log('Peer connected with ID:', id);
+      setConnectionState('ready');
       onPeerIdChange(id);
-      onConnectionChange(false); // Initially not connected to other peers
-      toast.success(`Mesh network initialized. Your ID: ${id.substring(0, 8)}...`);
+      onConnectionChange(false);
+      toast.success(`Mesh network ready. Your ID: ${id.substring(0, 8)}...`);
+      initializationAttemptsRef.current = 0; // Reset attempts on success
     });
 
     peer.on('connection', (conn) => {
@@ -225,22 +275,47 @@ const MeshNetwork = forwardRef<MeshNetworkRef, MeshNetworkProps>(({
     });
 
     peer.on('disconnected', () => {
-      console.log('Peer disconnected');
+      console.log('Peer disconnected from signaling server');
+      setConnectionState('ready');
       updatePeersList();
-      toast.error('Disconnected from mesh network');
       
       // Attempt to reconnect to the signaling server
-      setTimeout(() => {
-        if (peerRef.current && !peerRef.current.destroyed) {
-          peerRef.current.reconnect();
-        }
-      }, 3000);
+      if (!peer.destroyed) {
+        setTimeout(() => {
+          console.log('Attempting to reconnect to signaling server...');
+          peer.reconnect();
+        }, 2000);
+      }
     });
 
     peer.on('error', (err) => {
       console.error('Peer error:', err);
-      toast.error(`Network error: ${err.type}`);
+      
+      // Handle different types of errors
+      if (err.type === 'network' || err.type === 'server-error') {
+        if (initializationAttemptsRef.current < maxInitializationAttempts) {
+          initializationAttemptsRef.current++;
+          toast.error(`Network error (attempt ${initializationAttemptsRef.current}/${maxInitializationAttempts}). Retrying...`);
+          
+          setTimeout(() => {
+            if (peerRef.current) {
+              peerRef.current.destroy();
+            }
+            initializePeer();
+          }, 3000 * initializationAttemptsRef.current); // Exponential backoff
+        } else {
+          setConnectionState('error');
+          toast.error('Failed to connect to mesh network after multiple attempts. Please check your internet connection.');
+        }
+      } else {
+        setConnectionState('error');
+        toast.error(`Mesh network error: ${err.type}`);
+      }
     });
+  };
+
+  useEffect(() => {
+    initializePeer();
 
     // Cleanup on unmount
     return () => {
@@ -252,7 +327,7 @@ const MeshNetwork = forwardRef<MeshNetworkRef, MeshNetworkProps>(({
         peerRef.current.destroy();
       }
     };
-  }, [onConnectionChange, onPeerIdChange, onPeersChange, onMessageReceived]);
+  }, []);
 
   return null;
 });
