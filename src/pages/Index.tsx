@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,6 +8,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { MapPin, Wifi, WifiOff, Users, AlertTriangle, MessageCircle, Phone } from "lucide-react";
 import MeshNetwork from "@/components/MeshNetwork";
 import EmergencyMap from "@/components/EmergencyMap";
+import ConnectionManager from "@/components/ConnectionManager";
+import EnhancedEmergencyMap from "@/components/EnhancedEmergencyMap";
 import { toast } from "sonner";
 
 interface EmergencyMessage {
@@ -20,6 +21,17 @@ interface EmergencyMessage {
   senderId: string;
 }
 
+interface NetworkTopology {
+  nodes: Array<{ id: string; connections: string[] }>;
+  edges: Array<{ from: string; to: string; quality: number }>;
+}
+
+interface DeviceLocation {
+  peerId: string;
+  location: { lat: number; lng: number };
+  lastSeen: Date;
+}
+
 const Index = () => {
   const [isConnected, setIsConnected] = useState(false);
   const [connectedPeers, setConnectedPeers] = useState<string[]>([]);
@@ -29,6 +41,10 @@ const Index = () => {
   const [targetPeerId, setTargetPeerId] = useState('');
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const meshNetworkRef = useRef<any>(null);
+  const [networkTopology, setNetworkTopology] = useState<NetworkTopology | undefined>();
+  const [deviceLocations, setDeviceLocations] = useState<DeviceLocation[]>([]);
+  const [connectionState, setConnectionState] = useState<'discovering' | 'connecting' | 'connected' | 'disconnected'>('disconnected');
+  const [autoDiscoveryEnabled, setAutoDiscoveryEnabled] = useState(true);
 
   useEffect(() => {
     // Get user location
@@ -115,6 +131,32 @@ const Index = () => {
     }
   };
 
+  const handlePeerDiscovered = (peerId: string, metadata?: any) => {
+    console.log('Peer discovered:', peerId);
+    
+    // Add to device locations with simulated location near user
+    if (userLocation) {
+      const randomOffset = () => (Math.random() - 0.5) * 0.01; // ~1km radius
+      const deviceLocation: DeviceLocation = {
+        peerId,
+        location: {
+          lat: userLocation.lat + randomOffset(),
+          lng: userLocation.lng + randomOffset()
+        },
+        lastSeen: new Date()
+      };
+      
+      setDeviceLocations(prev => {
+        const filtered = prev.filter(d => d.peerId !== peerId);
+        return [...filtered, deviceLocation];
+      });
+    }
+  };
+
+  const handleTopologyChange = (topology: NetworkTopology) => {
+    setNetworkTopology(topology);
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-900 via-slate-800 to-red-900 p-4">
       <div className="container mx-auto max-w-6xl">
@@ -129,19 +171,21 @@ const Index = () => {
           <p className="text-slate-300 text-sm mt-2">Peer-to-peer emergency messaging when traditional networks fail</p>
         </div>
 
-        {/* Network Status */}
+        {/* Enhanced Network Status */}
         <Card className="mb-6 border-2 border-blue-400/30 bg-slate-900/80 backdrop-blur">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-white">
               {isConnected ? <Wifi className="text-green-400" /> : <WifiOff className="text-red-400" />}
-              Network Status
+              Enhanced Network Status
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="text-center">
-                <div className="text-2xl font-bold text-white">{isConnected ? 'ONLINE' : 'OFFLINE'}</div>
-                <div className="text-sm text-slate-300">Mesh Status</div>
+                <div className="text-2xl font-bold text-white">
+                  {connectionState.toUpperCase()}
+                </div>
+                <div className="text-sm text-slate-300">Connection State</div>
               </div>
               <div className="text-center">
                 <div className="text-2xl font-bold text-blue-400 flex items-center justify-center gap-2">
@@ -151,23 +195,42 @@ const Index = () => {
                 <div className="text-sm text-slate-300">Connected Peers</div>
               </div>
               <div className="text-center">
+                <div className="text-2xl font-bold text-purple-400">{deviceLocations.length}</div>
+                <div className="text-sm text-slate-300">Discovered Devices</div>
+              </div>
+              <div className="text-center">
                 <div className="text-2xl font-bold text-green-400">{messages.length}</div>
                 <div className="text-sm text-slate-300">Messages Received</div>
               </div>
             </div>
+            
+            {autoDiscoveryEnabled && (
+              <Alert className="mt-4 border-blue-400/30 bg-blue-900/20">
+                <AlertDescription className="text-blue-200">
+                  🔍 Auto-discovery active: Automatically scanning and connecting to nearby devices
+                </AlertDescription>
+              </Alert>
+            )}
           </CardContent>
         </Card>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left Column - Communication */}
           <div className="space-y-6">
-            {/* Mesh Network Component */}
+            {/* Enhanced Mesh Network Components */}
             <MeshNetwork
               ref={meshNetworkRef}
               onConnectionChange={setIsConnected}
               onPeerIdChange={setPeerId}
               onPeersChange={setConnectedPeers}
               onMessageReceived={(msg) => setMessages(prev => [msg, ...prev])}
+              onTopologyChange={handleTopologyChange}
+            />
+            
+            <ConnectionManager
+              onPeerDiscovered={handlePeerDiscovered}
+              onConnectionStateChange={setConnectionState}
+              meshNetworkRef={meshNetworkRef}
             />
 
             {/* Emergency Controls */}
@@ -245,15 +308,26 @@ const Index = () => {
               </CardContent>
             </Card>
 
-            {/* Manual Peer Connection */}
+            {/* Enhanced Manual Peer Connection */}
             <Card className="border-slate-600 bg-slate-900/80 backdrop-blur">
               <CardHeader>
                 <CardTitle className="text-blue-400 flex items-center gap-2">
                   <Phone />
-                  Connect to Peer
+                  Network Management
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm text-slate-300">Auto-Discovery:</label>
+                  <Button
+                    variant={autoDiscoveryEnabled ? "default" : "secondary"}
+                    size="sm"
+                    onClick={() => setAutoDiscoveryEnabled(!autoDiscoveryEnabled)}
+                  >
+                    {autoDiscoveryEnabled ? "ON" : "OFF"}
+                  </Button>
+                </div>
+                
                 <div>
                   <label className="text-sm text-slate-300">Your Peer ID:</label>
                   <Input 
@@ -281,25 +355,31 @@ const Index = () => {
                   disabled={!targetPeerId.trim() || !isConnected}
                   className="w-full"
                 >
-                  Connect
+                  Connect Manually
                 </Button>
               </CardContent>
             </Card>
           </div>
 
-          {/* Right Column - Map and Messages */}
+          {/* Right Column - Enhanced Map and Messages */}
           <div className="space-y-6">
-            {/* Emergency Map */}
+            {/* Enhanced Emergency Map */}
             <Card className="border-2 border-green-400/30 bg-slate-900/80 backdrop-blur">
               <CardHeader>
                 <CardTitle className="text-green-400 flex items-center gap-2">
                   <MapPin />
-                  Emergency Locations
+                  Mesh Network & Emergency Map
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="h-64 rounded-lg overflow-hidden">
-                  <EmergencyMap messages={messages} userLocation={userLocation} />
+                <div className="h-80 rounded-lg overflow-hidden">
+                  <EnhancedEmergencyMap 
+                    messages={messages} 
+                    userLocation={userLocation}
+                    networkTopology={networkTopology}
+                    connectedPeers={connectedPeers}
+                    deviceLocations={deviceLocations}
+                  />
                 </div>
               </CardContent>
             </Card>
