@@ -214,6 +214,6 @@ const ConnectionManager: React.FC<ConnectionManagerProps> = ({
   }, []);
 
   return null;
-});
+};
 
 export default ConnectionManager;
